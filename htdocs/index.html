@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width; initial-scale=1; maximum-scale=1; user-scalable=0;"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>Alien Invasion</title>
+<style type="text/css">
+
+body
+{
+	margin: 0; padding: 0;
+	overflow: hidden;
+	background: #000;
+}
+
+canvas
+{
+	-webkit-transform: scale3d( 1, 1, 1 );
+}
+
+</style>
+<script>
+
+"use strict";
+
+// http://paulirish.com/2011/requestanimationframe-for-smart-animating/
+// http://my.opera.com/emoller/blog/2011/12/20/requestanimationframe-for-smart-er-animating
+
+// requestAnimationFrame polyfill by Erik Möller
+// fixes from Paul Irish and Tino Zijdel
+
+(function()
+{
+	var lastTime = 0,
+		vendors = ['ms', 'moz', 'webkit', 'o'];
+
+	for( var x = 0;
+		x < vendors.length && !window.requestAnimationFrame;
+		++x )
+	{
+		window.requestAnimationFrame = window[
+			vendors[x]+'RequestAnimationFrame'];
+		window.cancelAnimationFrame = window[
+			vendors[x]+'CancelAnimationFrame'] || window[
+			vendors[x]+'CancelRequestAnimationFrame'];
+	}
+
+	if( !window.requestAnimationFrame )
+		window.requestAnimationFrame = function( callback, element )
+		{
+			var currTime = new Date().getTime(),
+				timeToCall = Math.max( 0, 16-(currTime-lastTime) ),
+				id = window.setTimeout(
+					function()
+					{
+						callback( currTime+timeToCall );
+					},
+					timeToCall);
+
+			lastTime = currTime+timeToCall;
+			return id;
+		};
+
+	if( !window.cancelAnimationFrame )
+		window.cancelAnimationFrame = function( id )
+		{
+			clearTimeout( id );
+		};
+}());
+
+var Game = Game || {};
+
+(function( g )
+{
+	var loading = true,
+		context = null,
+		pc = null,
+		images = {},
+		objects = [],
+		debris = [],
+		viewWidth,
+		viewHeight,
+		viewMin,
+		viewMax,
+		viewCx,
+		viewCy,
+		sizeEarth,
+		sizeUfo,
+		sizeIcbm,
+		sizeMargin,
+		speedIcbm,
+		speedDebris,
+		speedThrust,
+		activeUfo = null,
+		liveEarthMax = 2000,
+		liveUfoMax = 100,
+		liveDebrisMax = 10,
+		earthOrientation = 0,
+		earthLive = liveEarthMax,
+		earthLoadingMax = 20,
+		earthLoading = earthLoadingMax,
+		radiusEarth,
+		radiusQueue,
+		radiusMax,
+		radiusAttack,
+		pathSize,
+		laserSize,
+		gravity,
+		firstIcbm,
+		lastDebris,
+		down = false,
+		done = false,
+		victory;
+
+	function drawLive( c, x, y, p )
+	{
+		if( p < 0 )
+			p = 0;
+
+		y -= sizeMargin;
+
+		c.beginPath();
+		c.lineWidth = laserSize;
+		c.strokeStyle = "#66B300";
+		c.moveTo( x, y );
+		c.lineTo( x+p, y );
+		c.stroke();
+	}
+
+	function draw( c )
+	{
+		c.clearRect( 0, 0, viewWidth, viewHeight );
+
+		// draw path
+		if( !victory &&
+			activeUfo )
+			c.drawImage( pc, 0, 0 );
+
+		// draw earth
+		if( !victory )
+		{
+			var i = images.earth;
+
+			if( (earthOrientation += .001) > Math.TAU )
+				earthOrientation -= Math.TAU;
+
+			drawLive(
+				c,
+				viewCx-i.cx,
+				viewCy-i.cy,
+				i.width/liveEarthMax*earthLive );
+
+			c.save();
+			c.translate( viewCx, viewCy );
+			c.rotate( earthOrientation );
+			c.translate( -viewCx, -viewCy );
+			c.drawImage(
+				i,
+				viewCx-i.cx,
+				viewCy-i.cy );
+			c.restore();
+		}
+
+		// draw debris
+		{
+			c.beginPath();
+			c.fillStyle = "#66B300";
+
+			for( var n = debris.length; n--; )
+			{
+				var d = debris[n];
+
+				if( d.live <= 0 )
+					continue;
+
+				c.arc( d.x, d.y, laserSize, 0, Math.TAU, false );
+				c.fill();
+
+				d.x += d.vx;
+				d.y += d.vy;
+
+				--d.live;
+			}
+		}
+
+		// draw objects
+		for( var n = objects.length; n--; )
+		{
+			var o = objects[n];
+
+			if( !o.alive() )
+				continue;
+
+			var i = n < firstIcbm ? images.ufo : images.icbm;
+
+			if( n < firstIcbm )
+			{
+				drawLive(
+					c,
+					o.x-i.cx,
+					o.y-i.cy,
+					i.width/liveUfoMax*o.live );
+
+				if( o.firing )
+				{
+					var a = Math.random()*Math.TAU,
+						r = Math.random()*radiusEarth;
+
+					c.beginPath();
+					c.lineWidth = laserSize;
+					c.strokeStyle = "#66B300";
+					c.moveTo( o.x, o.y );
+					c.lineTo(
+						viewCx+r*Math.cos( a ),
+						viewCy+r*Math.sin( a ) );
+					c.stroke();
+				}
+			}
+			else if( !o.shot )
+				continue;
+
+			c.save();
+			c.translate( o.x, o.y );
+			c.rotate( o.orientation );
+			c.translate( -o.x, -o.y );
+			c.drawImage(
+				i,
+				o.x-i.cx,
+				o.y-i.cy );
+			c.restore();
+		}
+
+		if( done )
+		{
+			c.fillStyle = "#fff";
+			c.font = "bold 3em monospace";
+			c.textAlign = "center";
+			c.textBaseline = "middle";
+			c.fillText(
+				victory ? "You won!" : "You loose!",
+				viewCx,
+				viewCy/2 );
+		}
+	}
+
+	function drawPath( o )
+	{
+		var c = pc.context,
+			x = o.x,
+			y = o.y,
+			vx = o.vx,
+			vy = o.vy,
+			m = 0,
+			mx = -1,
+			p = {
+				x: o.x,
+				y: o.y,
+				vx: o.vx,
+				vy: o.vy };
+
+		c.clearRect( 0, 0, viewWidth, viewHeight );
+		c.lineWidth = pathSize;
+		c.strokeStyle = "#0066B3";
+		c.beginPath();
+		c.moveTo( x, y );
+
+		for( ;; )
+		{
+			var xx = viewCx-x,
+				yy = viewCy-y,
+				d = Math.sqrt( xx*xx+yy*yy );
+
+			if( d > radiusMax ||
+				d < radiusEarth )
+				break;
+
+			var g = gravity/(d*d);
+			vx += g*(xx/d);
+			vy += g*(yy/d);
+			x += vx;
+			y += vy;
+
+			c.lineTo( x, y );
+
+			xx = Math.abs( x-o.x );
+			yy = Math.abs( y-o.y );
+
+			if( mx > 10 &&
+				xx <= 1 &&
+				yy <= 1 )
+			{
+				c.closePath();
+				break;
+			}
+
+			var m = Math.max( xx, yy );
+
+			if( m > mx )
+				mx = m;
+		}
+
+		c.stroke();
+	}
+
+	function update()
+	{
+		if( --earthLoading < 0 )
+			earthLoading = earthLoadingMax;
+
+		if( down &&
+			activeUfo )
+			activeUfo.thrust();
+
+		for( var n = objects.length; n--; )
+		{
+			var o = objects[n];
+
+			if( !o.alive() )
+				continue;
+
+			var xx = viewCx-o.x,
+				yy = viewCy-o.y,
+				d = Math.sqrt( xx*xx+yy*yy );
+
+			if( !o.update( d ) )
+				continue;
+
+			var g = gravity/(d*d);
+			o.vx += g*(xx/d);
+			o.vy += g*(yy/d);
+			o.x += o.vx;
+			o.y += o.vy;
+
+			for( var b = objects.length; b--; )
+				if( b != n )
+				{
+					var ub = objects[b];
+
+					if( ub.overlaps( o.x, o.y ) )
+					{
+						o.damage( ub.power );
+						ub.damage( o.power );
+						break;
+					}
+				}
+
+			if( !o.alive() )
+				continue;
+
+			if( o === activeUfo &&
+				o.updatePath )
+			{
+				drawPath( o );
+				activeUfo.updatePath = false;
+			}
+		}
+	}
+
+	function pointFromEvent( ev )
+	{
+		var x,
+			y;
+
+		if( ev.touches )
+		{
+			var t = ev.touches[0];
+
+			x = t.pageX;
+			y = t.pageY;
+		}
+		else if( window.opera )
+		{
+			x = event.clientX;
+			y = event.clientY;
+		}
+		else if( document.all )
+		{
+			if( document.documentElement &&
+				document.documentElement.scrollTop )
+			{
+				x = event.clientX+document.documentElement.scrollLeft;
+				y = event.clientY+document.documentElement.scrollTop;
+			}
+			else
+			{
+				x = event.clientX+document.body.scrollLeft;
+				y = event.clientY+document.body.scrollTop;
+			}
+		}
+		else
+		{
+			x = ev.pageX;
+			y = ev.pageY;
+		}
+
+		return { x: x, y: y }
+	}
+
+	function mouseMove( ev )
+	{
+		if( activeUfo )
+			activeUfo.headTo( pointFromEvent( ev ) );
+
+		return true;
+	}
+
+	function mouseDown( ev )
+	{
+		var p = pointFromEvent( ev );
+
+		for( var n = objects.length; n--; )
+		{
+			var o = objects[n];
+
+			if( o.isUfo &&
+				o.alive() &&
+				o.overlaps( p.x, p.y ) )
+			{
+				activeUfo = o;
+				activeUfo.updatePath = true;
+				return true;
+			}
+		}
+
+		down = true;
+
+		if( activeUfo )
+			activeUfo.headTo( p );
+
+		return true;
+	}
+
+	function mouseUp( ev )
+	{
+		down = false;
+
+		return true;
+	}
+
+	function debrisAt( x, y, size )
+	{
+		for( var n = size || 20, l = debris.length; n--; )
+		{
+			var d = debris[lastDebris];
+
+			if( ++lastDebris >= l )
+				lastDebris = 0;
+
+			d.live = liveDebrisMax;
+			d.x = x;
+			d.y = y;
+			d.vx = ((Math.random()*2)-1)*speedDebris;
+			d.vy = ((Math.random()*2)-1)*speedDebris;
+		}
+	}
+
+	function finish( v )
+	{
+		if( (victory = v) )
+		{
+			debrisAt( viewCx, viewCy );
+			gravity = 0;
+		}
+
+		done = true;
+	}
+
+	g.run = function()
+	{
+		if( loading )
+		{
+			for( var n in images )
+			{
+				var i = images[n];
+
+				if( !i.complete )
+				{
+					setTimeout( g.run, 1000 );
+					return;
+				}
+				else if( typeof( i.cx ) === "undefined" )
+				{
+					var s;
+
+					if( n == "earth" )
+						s = sizeEarth;
+					else if( n == "ufo" )
+						s = sizeUfo;
+					else if( n == "icbm" )
+						s = sizeIcbm;
+
+					var c = document.createElement( "canvas" );
+
+					if( i.width > i.height )
+					{
+						c.height = (i.height/i.width)*s;
+						c.width = s;
+					}
+					else
+					{
+						c.width = (i.width/i.height)*s;
+						c.height = s;
+					}
+
+					var ctx = c.getContext( "2d" );
+					ctx.drawImage( i, 0, 0, c.width, c.height );
+
+					c.cx = c.width/2;
+					c.cy = c.height/2;
+					images[n] = c;
+				}
+			}
+
+			loading = false;
+		}
+
+		if( !done &&
+			!activeUfo )
+		{
+			var survivors = false,
+				m = objects.length-1,
+				start = Math.round( Math.random()*m ),
+				n = start;
+
+			do
+			{
+				var o = objects[n];
+
+				if( o.isUfo &&
+					o.alive() )
+				{
+					survivors = true;
+
+					if( o.queued )
+					{
+						o.queued = false;
+						o.vx *= .3;
+						o.vy *= .3;
+						activeUfo = o;
+						break;
+					}
+				}
+
+				if( ++n > m )
+					n = 0;
+
+			} while( n != start );
+
+			if( !survivors )
+				finish( false );
+		}
+
+		update();
+		draw( context );
+
+		//setTimeout( g.run, 10 );
+		requestAnimationFrame( g.run );
+	}
+
+	g.init = function( c )
+	{
+		if( !c ||
+			!(context = c.getContext( "2d" )) )
+			return false;
+
+		Math.TAU = Math.TAU || Math.PI*2;
+		Math.HPI = Math.HPI || Math.PI/2;
+
+		// start loading resources
+		{
+			images =
+			{
+				earth: "images/earth.png",
+				ufo: "images/ufo.png",
+				icbm: "images/icbm.png"
+			};
+
+			for( var n in images )
+			{
+				var i = new Image();
+				i.src = images[n];
+				images[n] = i;
+			}
+		}
+
+		// calculate metrics and gravity
+		{
+			viewWidth = c.width;
+			viewHeight = c.height;
+			viewMin = Math.min( viewWidth, viewHeight );
+			viewMax = Math.max( viewWidth, viewHeight );
+			viewCx = viewWidth/2;
+			viewCy = viewHeight/2;
+
+			sizeEarth = viewMin*.1;
+			sizeUfo = viewMin*.04;
+			sizeIcbm = viewMin*.035;
+			sizeMargin = viewMin*.02;
+
+			speedThrust = viewMin*.025;
+			speedIcbm = viewMin*.01;
+			speedDebris = viewMin*.005;
+
+			gravity = viewMin/8;
+			radiusEarth = sizeEarth/2;
+			radiusQueue = viewMin/2-sizeUfo;
+			radiusMax = viewMax/2+sizeUfo;
+			radiusAttack = radiusQueue*.75;
+
+			if( (pathSize = Math.ceil( viewMin*.001 )) < 2 )
+				pathSize = 2;
+
+			laserSize = pathSize;
+		}
+
+		// create path canvas
+		{
+			pc = document.createElement( "canvas" );
+			pc.width = viewWidth;
+			pc.height = viewHeight;
+			pc.context = pc.getContext( "2d" );
+		}
+
+		// create debris particles
+		{
+			for( var n = 100; n--; )
+				debris[n] = {
+					live: 0,
+					x: 0,
+					y: 0,
+					vx: 0,
+					vy: 0 };
+
+			lastDebris = 0;
+		}
+
+		function GameObject(){}
+		GameObject.prototype = {
+			live: liveUfoMax,
+			power: liveUfoMax,
+			radius: 0,
+			orientation: 0,
+			isUfo: false,
+
+			update: function( n, d )
+			{
+				return true;
+			},
+			damage: function( d )
+			{
+				if( (this.live -= d) > 0 )
+				{
+					debrisAt( this.x, this.y, 5 );
+					return;
+				}
+
+				this.destroy();
+			},
+			alive: function()
+			{
+				return (this.live > 0);
+			},
+			destroy: function()
+			{
+				this.live = 0;
+				this.updatePath = false;
+
+				debrisAt( this.x, this.y );
+
+				if( activeUfo === this )
+					activeUfo = null;
+			},
+			overlaps: function( x, y )
+			{
+				return (this.alive() &&
+					Math.abs( x-this.x ) < this.radius &&
+					Math.abs( y-this.y ) < this.radius);
+			},
+			headTo: function( p )
+			{
+				if( (this.orientation = Math.atan2(
+						p.y-this.y,
+						p.x-this.x )+Math.HPI) > Math.TAU )
+					this.orientation -= Math.TAU;
+			},
+			thrust: function()
+			{
+				this.vx += Math.sin( this.orientation )/speedThrust;
+				this.vy += -Math.cos( this.orientation )/speedThrust;
+				this.updatePath = true;
+			}
+		};
+
+		// create ufos
+		for( var n = 16,
+				f = Math.TAU/n, f2 = f/2, f4 = f2/2,
+				s = 0;
+			n--;
+			s += f )
+		{
+			var o = new GameObject();
+			o.isUfo = true;
+			o.init = function( angle )
+			{
+				var r = radiusMax-1;
+				this.x = viewCx+r*Math.cos( angle );
+				this.y = viewCy+r*Math.sin( angle );
+
+				var m = this.orbitPower( r );
+				this.vx = (-(viewCy-this.y)/r)*m;
+				this.vy = ((viewCx-this.x)/r)*m;
+				m = (r-radiusQueue)/24;
+				this.vx += (viewCx-this.x)/r*m;
+				this.vy += (viewCy-this.y)/r*m;
+
+				this.radius = sizeUfo/2;
+				this.orientation = Math.random()*Math.TAU;
+				this.spin = .005-.010*Math.random();
+				this.queued = false;
+				this.updatePath = true;
+				this.laserMax = 10;
+				this.laser = 0;
+				this.firing = false;
+			};
+			o.update = function( d )
+			{
+				if( victory )
+				{
+					this.firing = false;
+					return true;
+				}
+
+				if( !this.queued )
+				{
+					if( (this.orientation += this.spin) > Math.TAU )
+						this.orientation -= Math.TAU;
+					else if( this.orientation < 0 )
+						this.orientation += Math.TAU;
+				}
+
+				if( d > radiusMax ||
+					d < radiusEarth )
+				{
+					if( d < radiusEarth )
+						earthLive -= this.power;
+
+					this.destroy();
+
+					return false;
+				}
+
+				if( activeUfo !== this &&
+					!this.queued &&
+					d <= radiusQueue )
+				{
+					this.orbit( d );
+					this.queued = true;
+				}
+
+				if( d < radiusAttack )
+				{
+					if( earthLoading == earthLoadingMax )
+					{
+						for( var n = firstIcbm, l = objects.length;
+							n < l;
+							++n )
+						{
+							var o = objects[n];
+
+							if( !o.shot )
+							{
+								o.fire( this );
+								break;
+							}
+						}
+					}
+
+					if( --this.laser <= 0 )
+					{
+						this.firing ^= true;
+						this.laser = this.laserMax;
+					}
+
+					if( this.firing &&
+						--earthLive <= 0 )
+					{
+						finish( true );
+					}
+				}
+				else
+				{
+					this.firing = false;
+					this.laser = this.laserMax;
+				}
+
+				return true;
+			};
+			o.orbitPower = function( r )
+			{
+				var rr = r*r,
+					g = gravity/rr,
+					d = r+g/2;
+
+				return Math.sqrt( (d*d)-rr );
+			};
+			o.orbitVector = function( r, x, y )
+			{
+				var m = this.orbitPower( r );
+
+				return {
+					x: (-(viewCy-y)/r)*m,
+					y: ((viewCx-x)/r)*m
+				};
+			};
+			o.orbit = function( r )
+			{
+				var v = this.orbitVector( r, this.x, this.y );
+
+				this.vx = v.x
+				this.vy = v.y;
+			};
+
+			o.init( s-(Math.random()*f2-f4) );
+			objects.push( o );
+		}
+
+		// create icbm's
+		firstIcbm = objects.length;
+
+		for( var n = 16; n--; )
+		{
+			var o = new GameObject();
+			o.init = function()
+			{
+				this.radius = sizeIcbm/2;
+				this.shot = false;
+				this.power = liveUfoMax/5;
+			};
+			o.update = function( d )
+			{
+				if( d > radiusMax )
+					this.destroy();
+
+				return true;
+			};
+			o.fire = function( ufo )
+			{
+				var xx = ufo.x-viewCx,
+					yy = ufo.y-viewCy,
+					d = Math.sqrt( xx*xx+yy*yy ),
+					a = Math.atan2( yy, xx ),
+					r = radiusEarth+1;
+
+				this.x = viewCx+r*Math.cos( a );
+				this.y = viewCy+r*Math.sin( a );
+				this.vx = xx/d*speedIcbm+Math.random();
+				this.vy = yy/d*speedIcbm+Math.random();
+				this.orientation = a+Math.HPI;
+
+				this.shot = true;
+			};
+			o.destroy = function()
+			{
+				this.shot = false;
+				this.live = 100;
+			};
+
+			o.init();
+			objects.push( o );
+		}
+
+		c.onmousemove = mouseMove;
+		c.onmousedown = mouseDown;
+		c.onmouseup = mouseUp;
+
+		if( "ontouchstart" in document.documentElement )
+		{
+			c.ontouchmove = mouseMove;
+			c.ontouchstart = mouseDown;
+			c.ontouchend = mouseUp;
+		}
+
+		return true;
+	}
+})( Game );
+
+window.onload = function()
+{
+	var c = document.getElementById( "canvas" ),
+		w,
+		h;
+
+	if( self.innerWidth )
+	{
+		w = self.innerWidth;
+		h = self.innerHeight;
+	}
+	else if( document.documentElement &&
+		document.documentElement.clientWidth )
+	{
+		w = document.documentElement.clientWidth;
+		h = document.documentElement.clientHeight;
+	}
+	else
+	{
+		w = document.body.clientWidth;
+		h = document.body.clientHeight;
+	}
+
+	c.width = w;
+	c.height = h;
+
+	Game.init( c ) && Game.run();
+}
+
+</script>
+</head>
+<body>
+<canvas id="canvas"/>
+</body>
+</html>
