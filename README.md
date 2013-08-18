@@ -7,7 +7,7 @@ Theme was _You Are The Villain_.
 Play it
 -------
 
-Games are made for [playing](alien.markusfisch.de).
+Games are made for [playing](http://hhsw.de/sites/proto/ld25).
 
 Disclaimer
 ----------
