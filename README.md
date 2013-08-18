@@ -3,6 +3,8 @@ Alien Invasion
 
 A game for [Ludum Dare](http://ludumdare.com) #25.
 Theme was _You Are The Villain_.
+View original
+[entry](http://www.ludumdare.com/compo/ludum-dare-25/?uid=19466).
 
 Play it
 -------
